@@ -2,6 +2,8 @@ group 'com.cganoo.exercises'
 version '1.0'
 
 apply plugin: 'java'
+apply plugin: 'application'
+mainClassName = 'main.Application'
 
 sourceCompatibility = 1.8
 
