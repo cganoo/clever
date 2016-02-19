@@ -47,20 +47,30 @@ public class CleverClient extends AbstractScheduledService {
     }
 
     /**
+     * Queries the Clever API endpoint for districts and students per section in these districts
      * @return average number of students per section across all districts
      * @throws IOException
      */
     private Long getAvgStudentsPerSection() throws IOException {
         final List<String> districtIds = getDistrictIds();
+        if(districtIds == null || districtIds.isEmpty()) {
+            log.warn("No districts found");
+            return 0L;
+        }
         final List<Pair<Long, Long>> tuples = Lists.newArrayList();
         for(final String districtId : districtIds) {
             // For each district calculate # of sections and # of students
-            final long sections = getSectionStudentTuplesInDistrict(districtId).getLeft();
-            final long students = getSectionStudentTuplesInDistrict(districtId).getRight();
+            Pair<Long, Long> result = getSectionStudentTuplesInDistrict(districtId);
+            if(result == null) {
+                // skip over this null result
+                continue;
+            }
+            final long sections = result.getLeft();
+            final long students = result.getRight();
             log.info("Found {} sections and {} students for district {}", sections, students, districtId);
-            tuples.add(getSectionStudentTuplesInDistrict(districtId));
+            tuples.add(result);
         }
-
+        // Count total students and sections separately
         final Pair<Long, Long> result = tuples.stream().reduce(Pair.of(0L, 0L), (acc, p) -> Pair.of(acc.getLeft() + p.getLeft(), acc.getRight() + p.getRight()));
         log.info("Found a total of {} sections and {} students across all districts", result.getLeft(), result.getRight());
         return Long.valueOf(result.getRight() / result.getLeft());
@@ -74,6 +84,7 @@ public class CleverClient extends AbstractScheduledService {
     private List<String> getDistrictIds() throws IOException {
         final Call<GetDistrictsResponse> callDistricts = api.getDistricts();
         final Response<GetDistrictsResponse> response = callDistricts.execute();
+        // Collect the ids of all districts into a list
         return response.body().getData().stream().map(x -> x.getDistrict().getId()).collect(Collectors.toList());
     }
 
@@ -84,12 +95,19 @@ public class CleverClient extends AbstractScheduledService {
      * @throws IOException
      */
     private Pair<Long, Long> getSectionStudentTuplesInDistrict(final String districtId) throws IOException {
-        final Call<GetSectionsResponse> callSectionsForDistrict = api.getSectionsForDistrict(districtId);
-        final Response<GetSectionsResponse> response = callSectionsForDistrict.execute();
-        final List<SectionWithUri> sectionsList = response.body().getData();
-        long totalSections = sectionsList.size();
-        final List<Integer> sectionalStudentCounts = sectionsList.stream().map(x -> x.getSection().getStudentIds().size()).collect(Collectors.toList());
-        long totalStudents = sectionalStudentCounts.stream().reduce(0, (acc, item) -> acc + item);
-        return Pair.of(totalSections, totalStudents);
+        try {
+            final Call<GetSectionsResponse> callSectionsForDistrict = api.getSectionsForDistrict(districtId);
+            final Response<GetSectionsResponse> response = callSectionsForDistrict.execute();
+            final List<SectionWithUri> sectionsList = response.body().getData();
+            long totalSections = sectionsList.size();
+            // Extract students ids from each section into a list
+            final List<Integer> sectionalStudentCounts = sectionsList.stream().map(x -> x.getSection().getStudentIds().size()).collect(Collectors.toList());
+            // Count the total students
+            long totalStudents = sectionalStudentCounts.stream().reduce(0, (acc, item) -> acc + item);
+            return Pair.of(totalSections, totalStudents);
+        } catch (RuntimeException ex) {
+            log.error("Encountered exception [{}] when querying sections for district {}", ex, districtId);
+            throw ex;
+        }
     }
 }
